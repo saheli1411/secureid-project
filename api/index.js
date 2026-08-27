@@ -1,5 +1,4 @@
 const express = require('express');
-const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -8,61 +7,59 @@ const path = require('path');
 
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || 'secureid-iam-secret-jwt-key-2026';
+const SESSION_SECRET = 'secureid-session-cookie-secret-2026';
 const HMAC_SECRET = 'challenge-signing-secret-2026';
-const OTP_EXPIRY_MS = 2 * 60 * 1000; // 2 minutes
+const OTP_EXPIRY_MS = 2 * 60 * 1000;
 
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// Cookie-based Session Configuration
-app.use(session({
-  name: 'secureid_session',
-  secret: process.env.SESSION_SECRET || 'secureid-session-secret-2026',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
+// Stateless Session Helper
+function setSessionCookie(res, user) {
+  const token = jwt.sign(
+    { userId: user.id, name: user.name, email: user.email },
+    SESSION_SECRET,
+    { expiresIn: '1d' }
+  );
+  res.cookie('secureid_session', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: true,
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
-  }
-}));
+  });
+}
 
-// In-Memory User Registry
-const registeredUsers = new Map();
+function getSessionUser(req) {
+  const token = req.cookies.secureid_session;
+  if (!token) return null;
+  try {
+    return jwt.verify(token, SESSION_SECRET);
+  } catch (err) {
+    return null;
+  }
+}
+
+// Helpers for Challenge Signatures
+function hashValue(val) {
+  return crypto.createHash('sha256').update(val).digest('hex');
+}
 
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-function hashValue(val) {
-  return crypto.createHash('sha256').update(val).digest('hex');
-}
-
-// Create tamper-proof challenge payload (Stateless for Serverless)
 function issueChallengePayload(userId, channel, recipient, attempts = 0, forcedOtp = null) {
   const otp = forcedOtp || generateOTP();
   const challengeId = crypto.randomUUID();
   const expiresAt = Date.now() + OTP_EXPIRY_MS;
   const otpHash = hashValue(otp);
 
-  const payload = {
-    challengeId,
-    userId,
-    channel,
-    recipient,
-    otpHash,
-    expiresAt,
-    attempts,
-    otp // included for simulated evaluator delivery
-  };
-
+  const payload = { challengeId, userId, channel, recipient, otpHash, expiresAt, attempts, otp };
   const payloadStr = JSON.stringify(payload);
   const signature = crypto.createHmac('sha256', HMAC_SECRET).update(payloadStr).digest('hex');
   const challengeToken = Buffer.from(payloadStr).toString('base64') + '.' + signature;
 
-  console.log(`[SIMULATED ${channel.toUpperCase()} OTP] To: ${recipient} | OTP: ${otp}`);
   return { challengeToken, challengeId, otp, expiresInSeconds: 120 };
 }
 
@@ -90,20 +87,7 @@ app.post('/api/register', async (req, res) => {
   }
 
   const normalizedEmail = email.toLowerCase().trim();
-  const passwordHash = await bcrypt.hash(password, 10);
   const userId = crypto.randomUUID();
-
-  registeredUsers.set(normalizedEmail, {
-    id: userId,
-    name,
-    email: normalizedEmail,
-    phone,
-    passwordHash,
-    emailVerified: false,
-    phoneVerified: false,
-    mfaEnabled: false
-  });
-
   const challenge = issueChallengePayload(userId, 'email', normalizedEmail);
 
   res.json({
@@ -113,14 +97,14 @@ app.post('/api/register', async (req, res) => {
     simulatedOtp: challenge.otp,
     email: normalizedEmail,
     phone,
+    name,
     expiresInSeconds: challenge.expiresInSeconds
   });
 });
 
 app.post('/api/send-email-otp', (req, res) => {
   const { email } = req.body;
-  const normalizedEmail = email?.toLowerCase().trim();
-  const challenge = issueChallengePayload(crypto.randomUUID(), 'email', normalizedEmail);
+  const challenge = issueChallengePayload(crypto.randomUUID(), 'email', email?.toLowerCase().trim());
   res.json({
     success: true,
     challengeToken: challenge.challengeToken,
@@ -133,24 +117,18 @@ app.post('/api/verify-email-otp', (req, res) => {
   const { challengeToken, otp } = req.body;
   const payload = verifyChallengeToken(challengeToken);
 
-  if (!payload) {
-    return res.status(400).json({ status: 'invalid', error: 'Invalid challenge session.' });
-  }
-
-  if (Date.now() > payload.expiresAt) {
-    return res.status(400).json({ status: 'expired', error: 'Code has expired. Please request a new code.' });
-  }
+  if (!payload) return res.status(400).json({ status: 'invalid', error: 'Invalid challenge session.' });
+  if (Date.now() > payload.expiresAt) return res.status(400).json({ status: 'expired', error: 'Code has expired.' });
 
   if (payload.otpHash !== hashValue(otp)) {
     const attempts = payload.attempts + 1;
     if (attempts >= 3) {
-      return res.status(400).json({ status: 'max_attempts', error: 'Maximum attempts reached. Please request a new code.' });
+      return res.status(400).json({ status: 'max_attempts', error: 'Maximum attempts reached.' });
     }
-    // Reissue signed token with incremented attempt
     const updated = issueChallengePayload(payload.userId, payload.channel, payload.recipient, attempts, payload.otp);
     return res.status(400).json({
       status: 'wrong_code',
-      error: `Incorrect code. Please try again. You have ${3 - attempts} attempts left.`,
+      error: `Incorrect code. ${3 - attempts} attempt(s) left.`,
       updatedToken: updated.challengeToken
     });
   }
@@ -173,23 +151,18 @@ app.post('/api/verify-sms-otp', (req, res) => {
   const { challengeToken, otp } = req.body;
   const payload = verifyChallengeToken(challengeToken);
 
-  if (!payload) {
-    return res.status(400).json({ status: 'invalid', error: 'Invalid challenge session.' });
-  }
-
-  if (Date.now() > payload.expiresAt) {
-    return res.status(400).json({ status: 'expired', error: 'Code has expired. Please request a new code.' });
-  }
+  if (!payload) return res.status(400).json({ status: 'invalid', error: 'Invalid challenge session.' });
+  if (Date.now() > payload.expiresAt) return res.status(400).json({ status: 'expired', error: 'Code has expired.' });
 
   if (payload.otpHash !== hashValue(otp)) {
     const attempts = payload.attempts + 1;
     if (attempts >= 3) {
-      return res.status(400).json({ status: 'max_attempts', error: 'Maximum attempts reached. Please request a new code.' });
+      return res.status(400).json({ status: 'max_attempts', error: 'Maximum attempts reached.' });
     }
     const updated = issueChallengePayload(payload.userId, payload.channel, payload.recipient, attempts, payload.otp);
     return res.status(400).json({
       status: 'wrong_code',
-      error: `Incorrect code. Please try again. You have ${3 - attempts} attempts left.`,
+      error: `Incorrect code. ${3 - attempts} attempt(s) left.`,
       updatedToken: updated.challengeToken
     });
   }
@@ -203,22 +176,15 @@ app.post('/api/verify-sms-otp', (req, res) => {
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   const normalizedEmail = email?.toLowerCase().trim();
+  const userId = crypto.randomUUID();
 
-  // Validate or allow mock fallback if container recycled
-  const user = registeredUsers.get(normalizedEmail) || {
-    id: 'user-' + crypto.randomBytes(4).toString('hex'),
-    name: normalizedEmail.split('@')[0],
-    email: normalizedEmail,
-    mfaEnabled: true
-  };
-
-  const challenge = issueChallengePayload(user.id, 'email', user.email);
+  const challenge = issueChallengePayload(userId, 'email', normalizedEmail);
   return res.json({
     mfaRequired: true,
     method: 'email',
     challengeToken: challenge.challengeToken,
     simulatedOtp: challenge.otp,
-    email: user.email,
+    email: normalizedEmail,
     expiresInSeconds: challenge.expiresInSeconds
   });
 });
@@ -238,41 +204,47 @@ app.post('/api/verify-login-otp', (req, res) => {
     const updated = issueChallengePayload(payload.userId, payload.channel, payload.recipient, attempts, payload.otp);
     return res.status(400).json({
       status: 'wrong_code',
-      error: `Incorrect code. You have ${3 - attempts} attempts left.`,
+      error: `Incorrect code. ${3 - attempts} attempt(s) left.`,
       updatedToken: updated.challengeToken
     });
   }
 
-  req.session.userId = payload.userId;
-  req.session.email = payload.recipient;
-  req.session.name = payload.recipient.split('@')[0];
+  // Set stateless session cookie
+  setSessionCookie(res, {
+    id: payload.userId,
+    name: payload.recipient.split('@')[0],
+    email: payload.recipient
+  });
 
   res.json({ success: true, message: 'Authentication successful' });
 });
 
 // ----------------------------------------------------
-// 3. SESSION & JWT ENDPOINTS
+// 3. SESSION & PROTECTED ENDPOINTS
 // ----------------------------------------------------
 app.get('/api/me', (req, res) => {
-  if (!req.session || !req.session.userId) {
+  const user = getSessionUser(req);
+  if (!user) {
     return res.status(401).json({ error: 'Unauthorized: No active session' });
   }
-  res.json({ id: req.session.userId, name: req.session.name, email: req.session.email });
+  res.json({ id: user.userId, name: user.name, email: user.email });
 });
 
 app.post('/api/logout', (req, res) => {
-  req.session.destroy(() => {
-    res.clearCookie('secureid_session');
-    res.json({ success: true, message: 'Logged out successfully' });
-  });
+  res.clearCookie('secureid_session');
+  res.json({ success: true, message: 'Session invalidated' });
 });
 
+// ----------------------------------------------------
+// 4. JWT FLOW
+// ----------------------------------------------------
 app.post('/api/token', (req, res) => {
-  if (!req.session || !req.session.userId) {
+  const user = getSessionUser(req);
+  if (!user) {
     return res.status(401).json({ error: 'Active session required to issue JWT' });
   }
   const token = jwt.sign(
-    { sub: req.session.userId, email: req.session.email, name: req.session.name },
+    { sub: user.userId, email: user.email, name: user.name },
     JWT_SECRET,
     { expiresIn: '15m' }
   );
@@ -286,7 +258,11 @@ app.get('/api/protected', (req, res) => {
   }
   try {
     const payload = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
-    res.json({ message: 'Access granted to IAM protected API', user: payload, issuedAt: new Date(payload.iat * 1000).toISOString() });
+    res.json({
+      message: 'Access granted to IAM protected API',
+      user: payload,
+      issuedAt: new Date(payload.iat * 1000).toISOString()
+    });
   } catch (err) {
     res.status(403).json({ error: 'Invalid or expired JWT token' });
   }
