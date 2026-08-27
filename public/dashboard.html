@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard - SecureID</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="reg-body">
+  <div class="reg-card" style="max-width: 500px; text-align: center;">
+    <h2>Dashboard</h2>
+    <p class="subtitle">Authentication Verified via Session</p>
+    
+    <div style="margin: 20px 0; padding: 15px; background: #f8fafc; border-radius: 8px;">
+      <p>Name: <strong id="dashName"></strong></p>
+      <p>Email: <strong id="dashEmail"></strong></p>
+    </div>
+
+    <!-- JWT Flow Test Button -->
+    <button id="testJwtBtn" class="btn btn-primary" style="margin-bottom: 12px;">Test Protected JWT API</button>
+    <p id="jwtResult" class="status-msg"></p>
+
+    <button id="dashLogoutBtn" class="btn btn-secondary" style="margin-top: 10px;">Log Out</button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

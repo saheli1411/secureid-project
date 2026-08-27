@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login - SecureID</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="secureid-container">
+    
+    <!-- Left Sidebar -->
+    <div class="sidebar">
+      <div class="branding">
+        <svg class="brand-lock" width="48" height="48" viewBox="0 0 48 48" fill="none"><rect x="8" y="18" width="32" height="24" rx="4" fill="white"/><path d="M16 18V13.3333C16 8.91523 19.5817 5.33333 24 5.33333V5.33333C28.4183 5.33333 32 8.91523 32 13.3333V18" stroke="white" stroke-width="4" stroke-linecap="round"/></svg>
+        <h1 class="brand-name">SecureID</h1>
+        <p class="brand-slogan">Secure access,<br/>account protected.</p>
+      </div>
+    </div>
+
+    <!-- Right Content Area -->
+    <div class="form-area">
+      <div class="auth-card">
+
+        <!-- Default Credentials View -->
+        <div id="login-view-creds">
+          <h2>Welcome back!</h2>
+          <p class="subtitle">Login to your account</p>
+          <form id="loginForm">
+            <div class="input-group">
+              <label for="loginEmail">Email or Username</label>
+              <input type="email" id="loginEmail" placeholder="priya.sharma@email.com" required />
+            </div>
+
+            <div class="input-group password-group">
+              <label for="loginPassword">Password</label>
+              <div class="input-wrapper">
+                <input type="password" id="loginPassword" placeholder="••••••••" required />
+                <span class="password-toggle" id="toggleLoginPassword">👁</span>
+              </div>
+            </div>
+
+            <div class="form-options">
+              <div class="remember-me">
+                <input type="checkbox" id="rememberMe" />
+                <label for="rememberMe">Remember me</label>
+              </div>
+              <a href="#" class="forgot-password">Forgot password?</a>
+            </div>
+
+            <p id="loginError" class="status-msg error-text"></p>
+            <button type="submit" class="btn btn-primary">Login</button>
+          </form>
+
+          <div class="divider"><span>or</span></div>
+          <button class="btn btn-google">Continue with Google</button>
+          <p class="footer-link">New here? <a href="register.html">Create an account</a></p>
+          <p class="copyright">© 2024 SecureID. All rights reserved.</p>
+        </div>
+
+        <!-- MFA OTP Screen (Dynamically Triggered by Backend Response) -->
+        <div id="login-view-mfa" style="display:none;" class="otp-stage">
+          <div class="mail-icon-circle">🛡️</div>
+          <h2>Verify your identity</h2>
+          <p class="subtitle">Enter the MFA verification code sent to <strong id="mfaEmailDisplay"></strong></p>
+          <p id="evaluator-login-otp" class="evaluator-badge"></p>
+          
+          <input type="text" maxlength="6" id="loginOtpInput" class="otp-main-input" placeholder="000000" />
+          <p id="loginOtpMsg" class="status-msg"></p>
+          <p class="timer-text">Code expires in <span id="loginOtpTimer">02:00</span></p>
+          
+          <button id="verifyLoginOtpBtn" class="btn btn-primary btn-full">Verify & Access Account</button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Register - SecureID</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="reg-body">
+
+  <header class="reg-header">
+    <div class="header-brand">
+      <svg width="28" height="28" viewBox="0 0 48 48" fill="none"><rect x="8" y="18" width="32" height="24" rx="4" fill="#1a41a8"/><path d="M16 18V13.3333C16 8.91523 19.5817 5.33333 24 5.33333V5.33333C28.4183 5.33333 32 8.91523 32 13.3333V18" stroke="#1a41a8" stroke-width="4" stroke-linecap="round"/></svg>
+      <span>SecureID</span>
+    </div>
+  </header>
+
+  <div class="stepper-wrapper">
+    <div id="step-1" class="step-node active">1</div>
+    <div class="step-line"></div>
+    <div id="step-2" class="step-node">2</div>
+    <div class="step-line"></div>
+    <div id="step-3" class="step-node">3</div>
+    <div class="step-line"></div>
+    <div id="step-4" class="step-node">4</div>
+  </div>
+
+  <main class="reg-card">
+    
+    <!-- Step 1: Form -->
+    <div id="reg-stage-form">
+      <h2>Create your account</h2>
+      <p class="subtitle">Let's get you started</p>
+      <form id="registerForm">
+        <div class="form-grid">
+          <div class="form-fields">
+            <div class="input-group">
+              <label for="regName">Full Name</label>
+              <input type="text" id="regName" placeholder="Priya Sharma" required />
+            </div>
+            <div class="input-group">
+              <label for="regEmail">Email</label>
+              <input type="email" id="regEmail" placeholder="priya.sharma@email.com" required />
+            </div>
+            <div class="input-group">
+              <label for="regPhone">Mobile Number</label>
+              <div class="phone-input-wrapper">
+                <span class="country-code">+91</span>
+                <input type="tel" id="regPhone" placeholder="9876543210" required />
+              </div>
+            </div>
+            <div class="input-group password-group">
+              <label for="regPassword">Password</label>
+              <div class="input-wrapper">
+                <input type="password" id="regPassword" placeholder="••••••••••••" required />
+                <span class="password-toggle" id="toggleRegPassword">👁</span>
+              </div>
+            </div>
+          </div>
+          <div class="password-requirements">
+            <p class="req-title">Password must contain:</p>
+            <ul class="req-list">
+              <li id="req-len"><span class="check-icon">✓</span> At least 8 characters</li>
+              <li id="req-upper"><span class="check-icon">✓</span> 1 uppercase letter</li>
+              <li id="req-num"><span class="check-icon">✓</span> 1 number</li>
+              <li id="req-spec"><span class="check-icon">✓</span> 1 special character</li>
+            </ul>
+          </div>
+        </div>
+        <div class="terms-group">
+          <input type="checkbox" id="terms" required />
+          <label for="terms">I agree to the <a href="#">Terms & Conditions</a> and <a href="#">Privacy Policy</a></label>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full">Create Account</button>
+        <p id="regError" class="status-msg error-text"></p>
+      </form>
+    </div>
+
+    <!-- Step 2: Email OTP -->
+    <div id="reg-stage-email-otp" style="display: none;" class="otp-stage">
+      <div class="mail-icon-circle">✉️</div>
+      <h2>Verify your email</h2>
+      <p class="subtitle">We have sent a 6-digit code to <strong id="displayEmail"></strong></p>
+      <p id="evaluator-email-otp" class="evaluator-badge"></p>
+      
+      <input type="text" maxlength="6" id="emailOtpInput" class="otp-main-input" placeholder="000000" />
+      <p id="emailOtpMsg" class="status-msg"></p>
+      <p class="timer-text">Code expires in <span id="emailTimer">02:00</span></p>
+      
+      <button id="verifyEmailOtpBtn" class="btn btn-primary btn-full">Verify Email</button>
+      <button id="resendEmailOtpBtn" class="btn btn-link">Resend Code</button>
+    </div>
+
+    <!-- Step 3: SMS OTP -->
+    <div id="reg-stage-sms-otp" style="display: none;" class="otp-stage">
+      <div class="mail-icon-circle">📱</div>
+      <h2>Verify your mobile</h2>
+      <p class="subtitle">We have sent a 6-digit code to <strong id="displayPhone"></strong></p>
+      <p id="evaluator-sms-otp" class="evaluator-badge"></p>
+
+      <input type="text" maxlength="6" id="smsOtpInput" class="otp-main-input" placeholder="000000" />
+      <p id="smsOtpMsg" class="status-msg"></p>
+      <p class="timer-text">Code expires in <span id="smsTimer">02:00</span></p>
+
+      <button id="verifySmsOtpBtn" class="btn btn-primary btn-full">Verify Mobile</button>
+      <button id="resendSmsOtpBtn" class="btn btn-link">Resend Code</button>
+    </div>
+
+    <!-- Step 4: Success Screen -->
+    <div id="reg-stage-success" style="display: none;" class="otp-stage">
+      <div class="success-badge">✓</div>
+      <h2>Account created!</h2>
+      <p class="subtitle">Your account has been created successfully and MFA is enabled.</p>
+      <ul class="success-checklist">
+        <li>✓ Email verified</li>
+        <li>✓ Mobile verified</li>
+        <li>✓ MFA enabled</li>
+      </ul>
+      <a href="index.html" class="btn btn-primary btn-full" style="text-decoration: none; display: block; text-align: center;">Continue to Login</a>
+    </div>
+
+    <p class="footer-link">Already have an account? <a href="index.html">Login</a></p>
+    <p class="copyright">© 2024 SecureID. All rights reserved.</p>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
