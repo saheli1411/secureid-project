@@ -1,10 +1,9 @@
-let currentChallengeId = null;
+let currentChallengeToken = null;
 let currentEmail = null;
 let currentPhone = null;
 let otpTimerInterval = null;
-let inMemoryJwt = null; // Stored strictly in memory, NOT localStorage
+let inMemoryJwt = null;
 
-// Timer Helper
 function startTimer(durationSeconds, displayElement, onExpire) {
   clearInterval(otpTimerInterval);
   let remaining = durationSeconds;
@@ -12,7 +11,7 @@ function startTimer(durationSeconds, displayElement, onExpire) {
   function update() {
     const mins = Math.floor(remaining / 60).toString().padStart(2, '0');
     const secs = (remaining % 60).toString().padStart(2, '0');
-    displayElement.textContent = `${mins}:${secs}`;
+    if (displayElement) displayElement.textContent = `${mins}:${secs}`;
     if (remaining <= 0) {
       clearInterval(otpTimerInterval);
       if (onExpire) onExpire();
@@ -23,29 +22,19 @@ function startTimer(durationSeconds, displayElement, onExpire) {
   otpTimerInterval = setInterval(update, 1000);
 }
 
-// Evaluator Tooltip Helper: Fetches simulated OTP without opening the server console
-async function fetchEvaluatorOtp(challengeId, badgeElementId) {
-  try {
-    const res = await fetch(`/api/test/otp/${challengeId}`);
-    const data = await res.json();
-    if (data.simulatedOtp) {
-      const badge = document.getElementById(badgeElementId);
-      if (badge) {
-        badge.innerHTML = `Simulated OTP: <strong>${data.simulatedOtp}</strong>`;
-        badge.style.display = 'block';
-      }
-    }
-  } catch (e) {
-    console.warn('Evaluator OTP fetch skipped');
+function showBadge(elementId, otp) {
+  const badge = document.getElementById(elementId);
+  if (badge && otp) {
+    badge.innerHTML = `Simulated OTP: <strong>${otp}</strong>`;
+    badge.style.display = 'block';
   }
 }
 
 // ==========================================
-// REGISTRATION JOURNEY
+// REGISTRATION FLOW
 // ==========================================
 const regForm = document.getElementById('registerForm');
 if (regForm) {
-  // Dynamic Password Validation
   const pwdInput = document.getElementById('regPassword');
   pwdInput?.addEventListener('input', () => {
     const val = pwdInput.value;
@@ -55,12 +44,11 @@ if (regForm) {
     document.getElementById('req-spec')?.classList.toggle('valid', /[^A-Za-z0-9]/.test(val));
   });
 
-  // Password Visibility Toggle
   document.getElementById('toggleRegPassword')?.addEventListener('click', () => {
     pwdInput.type = pwdInput.type === 'password' ? 'text' : 'password';
   });
 
-  // Step 1: Submit Details
+  // 1. Submit Registration Form
   regForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('regName').value.trim();
@@ -82,7 +70,7 @@ if (regForm) {
       return;
     }
 
-    currentChallengeId = data.challengeId;
+    currentChallengeToken = data.challengeToken;
     currentEmail = data.email;
     currentPhone = data.phone;
 
@@ -91,15 +79,16 @@ if (regForm) {
     document.getElementById('reg-stage-email-otp').style.display = 'block';
     document.getElementById('step-2')?.classList.add('active');
 
-    fetchEvaluatorOtp(currentChallengeId, 'evaluator-email-otp');
+    showBadge('evaluator-email-otp', data.simulatedOtp);
     startTimer(data.expiresInSeconds || 120, document.getElementById('emailTimer'), () => {
-      document.getElementById('emailOtpMsg').textContent = 'This code has expired. Please request a new code.';
-      document.getElementById('emailOtpMsg').className = 'status-msg error-text';
+      const msg = document.getElementById('emailOtpMsg');
+      msg.textContent = 'This code has expired. Please request a new code.';
+      msg.className = 'status-msg error-text';
       document.getElementById('verifyEmailOtpBtn').disabled = true;
     });
   });
 
-  // Step 2: Verify Email OTP
+  // 2. Verify Email OTP
   document.getElementById('verifyEmailOtpBtn')?.addEventListener('click', async () => {
     const otp = document.getElementById('emailOtpInput').value.trim();
     const msg = document.getElementById('emailOtpMsg');
@@ -107,13 +96,14 @@ if (regForm) {
     const res = await fetch('/api/verify-email-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ challengeId: currentChallengeId, otp })
+      body: JSON.stringify({ challengeToken: currentChallengeToken, otp })
     });
     const data = await res.json();
 
     if (!res.ok) {
       msg.textContent = data.error;
       msg.className = 'status-msg error-text';
+      if (data.updatedToken) currentChallengeToken = data.updatedToken;
       return;
     }
 
@@ -121,20 +111,21 @@ if (regForm) {
     const smsRes = await fetch('/api/send-sms-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: currentEmail })
+      body: JSON.stringify({ phone: currentPhone })
     });
     const smsData = await smsRes.json();
-    currentChallengeId = smsData.challengeId;
+    currentChallengeToken = smsData.challengeToken;
 
     document.getElementById('displayPhone').textContent = currentPhone;
     document.getElementById('reg-stage-email-otp').style.display = 'none';
     document.getElementById('reg-stage-sms-otp').style.display = 'block';
     document.getElementById('step-3')?.classList.add('active');
 
-    fetchEvaluatorOtp(currentChallengeId, 'evaluator-sms-otp');
+    showBadge('evaluator-sms-otp', smsData.simulatedOtp);
     startTimer(smsData.expiresInSeconds || 120, document.getElementById('smsTimer'), () => {
-      document.getElementById('smsOtpMsg').textContent = 'This code has expired. Please request a new code.';
-      document.getElementById('smsOtpMsg').className = 'status-msg error-text';
+      const smsMsg = document.getElementById('smsOtpMsg');
+      smsMsg.textContent = 'This code has expired. Please request a new code.';
+      smsMsg.className = 'status-msg error-text';
       document.getElementById('verifySmsOtpBtn').disabled = true;
     });
   });
@@ -147,16 +138,16 @@ if (regForm) {
       body: JSON.stringify({ email: currentEmail })
     });
     const data = await res.json();
-    currentChallengeId = data.challengeId;
+    currentChallengeToken = data.challengeToken;
     document.getElementById('emailOtpInput').value = '';
     document.getElementById('emailOtpMsg').textContent = 'New code sent!';
     document.getElementById('emailOtpMsg').className = 'status-msg success-text';
     document.getElementById('verifyEmailOtpBtn').disabled = false;
-    fetchEvaluatorOtp(currentChallengeId, 'evaluator-email-otp');
+    showBadge('evaluator-email-otp', data.simulatedOtp);
     startTimer(120, document.getElementById('emailTimer'));
   });
 
-  // Step 3: Verify SMS OTP
+  // 3. Verify SMS OTP
   document.getElementById('verifySmsOtpBtn')?.addEventListener('click', async () => {
     const otp = document.getElementById('smsOtpInput').value.trim();
     const msg = document.getElementById('smsOtpMsg');
@@ -164,13 +155,14 @@ if (regForm) {
     const res = await fetch('/api/verify-sms-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ challengeId: currentChallengeId, otp })
+      body: JSON.stringify({ challengeToken: currentChallengeToken, otp })
     });
     const data = await res.json();
 
     if (!res.ok) {
       msg.textContent = data.error;
       msg.className = 'status-msg error-text';
+      if (data.updatedToken) currentChallengeToken = data.updatedToken;
       return;
     }
 
@@ -185,25 +177,24 @@ if (regForm) {
     const res = await fetch('/api/send-sms-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: currentEmail })
+      body: JSON.stringify({ phone: currentPhone })
     });
     const data = await res.json();
-    currentChallengeId = data.challengeId;
+    currentChallengeToken = data.challengeToken;
     document.getElementById('smsOtpInput').value = '';
     document.getElementById('smsOtpMsg').textContent = 'New code sent!';
     document.getElementById('smsOtpMsg').className = 'status-msg success-text';
     document.getElementById('verifySmsOtpBtn').disabled = false;
-    fetchEvaluatorOtp(currentChallengeId, 'evaluator-sms-otp');
+    showBadge('evaluator-sms-otp', data.simulatedOtp);
     startTimer(120, document.getElementById('smsTimer'));
   });
 }
 
 // ==========================================
-// LOGIN & MFA JOURNEY
+// LOGIN & MFA FLOW
 // ==========================================
 const loginForm = document.getElementById('loginForm');
 if (loginForm) {
-  // Password Visibility Toggle
   document.getElementById('toggleLoginPassword')?.addEventListener('click', () => {
     const pass = document.getElementById('loginPassword');
     pass.type = pass.type === 'password' ? 'text' : 'password';
@@ -229,15 +220,16 @@ if (loginForm) {
     }
 
     if (data.mfaRequired) {
-      currentChallengeId = data.challengeId;
+      currentChallengeToken = data.challengeToken;
       document.getElementById('login-view-creds').style.display = 'none';
       document.getElementById('login-view-mfa').style.display = 'block';
       document.getElementById('mfaEmailDisplay').textContent = data.email;
 
-      fetchEvaluatorOtp(currentChallengeId, 'evaluator-login-otp');
+      showBadge('evaluator-login-otp', data.simulatedOtp);
       startTimer(data.expiresInSeconds || 120, document.getElementById('loginOtpTimer'), () => {
-        document.getElementById('loginOtpMsg').textContent = 'Code expired. Please login again.';
-        document.getElementById('loginOtpMsg').className = 'status-msg error-text';
+        const msg = document.getElementById('loginOtpMsg');
+        msg.textContent = 'Code expired. Please login again.';
+        msg.className = 'status-msg error-text';
         document.getElementById('verifyLoginOtpBtn').disabled = true;
       });
     } else {
@@ -252,13 +244,14 @@ if (loginForm) {
     const res = await fetch('/api/verify-login-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ challengeId: currentChallengeId, otp })
+      body: JSON.stringify({ challengeToken: currentChallengeToken, otp })
     });
     const data = await res.json();
 
     if (!res.ok) {
       msg.textContent = data.error;
       msg.className = 'status-msg error-text';
+      if (data.updatedToken) currentChallengeToken = data.updatedToken;
       return;
     }
 
@@ -268,7 +261,7 @@ if (loginForm) {
 }
 
 // ==========================================
-// DASHBOARD & JWT PROTECTION
+// DASHBOARD FLOW
 // ==========================================
 const dashName = document.getElementById('dashName');
 if (dashName) {
@@ -291,7 +284,6 @@ if (dashName) {
     window.location.href = 'index.html';
   });
 
-  // JWT Flow: Issues short-lived token in-memory and queries protected endpoint
   document.getElementById('testJwtBtn')?.addEventListener('click', async () => {
     const resToken = await fetch('/api/token', { method: 'POST' });
     const tokenData = await resToken.json();
@@ -301,13 +293,11 @@ if (dashName) {
       return;
     }
 
-    inMemoryJwt = tokenData.accessToken; // Kept in memory, never stored in localStorage
+    inMemoryJwt = tokenData.accessToken;
 
     const resProtected = await fetch('/api/protected', {
       method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${inMemoryJwt}`
-      }
+      headers: { 'Authorization': `Bearer ${inMemoryJwt}` }
     });
     const protectedData = await resProtected.json();
     document.getElementById('jwtResult').innerHTML = `
