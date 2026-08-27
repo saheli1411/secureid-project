@@ -4,6 +4,7 @@ const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 
 const app = express();
@@ -14,6 +15,29 @@ const OTP_EXPIRY_MS = 2 * 60 * 1000; // 2 minutes
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, '../public')));
+
+// Serverless persistent file storage helper
+const DB_FILE = path.join('/tmp', 'secureid_db.json');
+
+function readDB() {
+  try {
+    if (!fs.existsSync(DB_FILE)) {
+      return { users: {}, challenges: {}, failedLogins: {}, evaluatorOtps: {} };
+    }
+    const data = fs.readFileSync(DB_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (err) {
+    return { users: {}, challenges: {}, failedLogins: {}, evaluatorOtps: {} };
+  }
+}
+
+function writeDB(data) {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to write DB:', err);
+  }
+}
 
 // Cookie-based Session Configuration
 app.use(session({
@@ -29,12 +53,6 @@ app.use(session({
   }
 }));
 
-// In-Memory Storage
-const users = new Map();         // email -> User Object
-const challenges = new Map();    // challengeId -> Challenge Object
-const failedLogins = new Map();  // email -> { attempts, lockoutUntil }
-const evaluatorOtpStore = new Map(); // challengeId -> plainOtp (for evaluator testing)
-
 // Helpers
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -45,28 +63,23 @@ function hashValue(val) {
 }
 
 function createChallenge(userId, channel, recipient) {
+  const db = readDB();
   const otp = generateOTP();
   const challengeId = crypto.randomUUID();
-  
-  challenges.set(challengeId, {
+
+  db.challenges[challengeId] = {
     challengeId,
     userId,
     channel,
     otpHash: hashValue(otp),
     expiresAt: Date.now() + OTP_EXPIRY_MS,
     attempts: 0
-  });
+  };
 
-  // Store for evaluator API & log to server console
-  evaluatorOtpStore.set(challengeId, otp);
-  console.log(`\n========================================`);
-  console.log(`[SIMULATED ${channel.toUpperCase()} OTP]`);
-  console.log(`To: ${recipient}`);
-  console.log(`OTP Code: ${otp}`);
-  console.log(`Challenge ID: ${challengeId}`);
-  console.log(`Expires In: 2 Minutes`);
-  console.log(`========================================\n`);
+  db.evaluatorOtps[challengeId] = otp;
+  writeDB(db);
 
+  console.log(`[SIMULATED ${channel.toUpperCase()} OTP] To: ${recipient} | OTP: ${otp} | Challenge: ${challengeId}`);
   return challengeId;
 }
 
@@ -74,7 +87,8 @@ function createChallenge(userId, channel, recipient) {
 // EVALUATOR TESTING HELPER ENDPOINT
 // ----------------------------------------------------
 app.get('/api/test/otp/:challengeId', (req, res) => {
-  const otp = evaluatorOtpStore.get(req.params.challengeId);
+  const db = readDB();
+  const otp = db.evaluatorOtps[req.params.challengeId];
   if (!otp) return res.status(404).json({ error: 'No active OTP found or expired' });
   res.json({ simulatedOtp: otp });
 });
@@ -88,8 +102,10 @@ app.post('/api/register', async (req, res) => {
     return res.status(400).json({ error: 'All fields are required.' });
   }
 
+  const db = readDB();
   const normalizedEmail = email.toLowerCase().trim();
-  if (users.has(normalizedEmail)) {
+
+  if (db.users[normalizedEmail]) {
     return res.status(400).json({ error: 'An account with this email already exists.' });
   }
 
@@ -105,7 +121,9 @@ app.post('/api/register', async (req, res) => {
     mfaEnabled: false
   };
 
-  users.set(normalizedEmail, user);
+  db.users[normalizedEmail] = user;
+  writeDB(db);
+
   const challengeId = createChallenge(user.id, 'email', user.email);
 
   res.json({
@@ -119,7 +137,8 @@ app.post('/api/register', async (req, res) => {
 
 app.post('/api/send-email-otp', (req, res) => {
   const { email } = req.body;
-  const user = users.get(email?.toLowerCase().trim());
+  const db = readDB();
+  const user = db.users[email?.toLowerCase().trim()];
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const challengeId = createChallenge(user.id, 'email', user.email);
@@ -128,42 +147,48 @@ app.post('/api/send-email-otp', (req, res) => {
 
 app.post('/api/verify-email-otp', (req, res) => {
   const { challengeId, otp } = req.body;
-  const challenge = challenges.get(challengeId);
+  const db = readDB();
+  const challenge = db.challenges[challengeId];
 
   if (!challenge) return res.status(400).json({ status: 'invalid', error: 'Invalid challenge session.' });
   if (Date.now() > challenge.expiresAt) {
-    challenges.delete(challengeId);
-    evaluatorOtpStore.delete(challengeId);
+    delete db.challenges[challengeId];
+    delete db.evaluatorOtps[challengeId];
+    writeDB(db);
     return res.status(400).json({ status: 'expired', error: 'Code has expired.' });
   }
 
   challenge.attempts += 1;
   if (challenge.otpHash !== hashValue(otp)) {
     if (challenge.attempts >= MAX_ATTEMPTS) {
-      challenges.delete(challengeId);
-      evaluatorOtpStore.delete(challengeId);
+      delete db.challenges[challengeId];
+      delete db.evaluatorOtps[challengeId];
+      writeDB(db);
       return res.status(400).json({ status: 'max_attempts', error: 'Maximum attempts reached.' });
     }
     const remaining = MAX_ATTEMPTS - challenge.attempts;
+    writeDB(db);
     return res.status(400).json({ status: 'wrong_code', error: `Incorrect code. Please try again. You have ${remaining} attempts left.` });
   }
 
-  challenges.delete(challengeId);
-  evaluatorOtpStore.delete(challengeId);
+  delete db.challenges[challengeId];
+  delete db.evaluatorOtps[challengeId];
 
-  for (let u of users.values()) {
-    if (u.id === challenge.userId) {
-      u.emailVerified = true;
+  for (let key in db.users) {
+    if (db.users[key].id === challenge.userId) {
+      db.users[key].emailVerified = true;
       break;
     }
   }
+  writeDB(db);
 
   res.json({ success: true, message: 'Email verified successfully.' });
 });
 
 app.post('/api/send-sms-otp', (req, res) => {
   const { email } = req.body;
-  const user = users.get(email?.toLowerCase().trim());
+  const db = readDB();
+  const user = db.users[email?.toLowerCase().trim()];
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const challengeId = createChallenge(user.id, 'sms', user.phone);
@@ -172,36 +197,41 @@ app.post('/api/send-sms-otp', (req, res) => {
 
 app.post('/api/verify-sms-otp', (req, res) => {
   const { challengeId, otp } = req.body;
-  const challenge = challenges.get(challengeId);
+  const db = readDB();
+  const challenge = db.challenges[challengeId];
 
   if (!challenge) return res.status(400).json({ status: 'invalid', error: 'Invalid challenge session.' });
   if (Date.now() > challenge.expiresAt) {
-    challenges.delete(challengeId);
-    evaluatorOtpStore.delete(challengeId);
+    delete db.challenges[challengeId];
+    delete db.evaluatorOtps[challengeId];
+    writeDB(db);
     return res.status(400).json({ status: 'expired', error: 'Code has expired.' });
   }
 
   challenge.attempts += 1;
   if (challenge.otpHash !== hashValue(otp)) {
     if (challenge.attempts >= MAX_ATTEMPTS) {
-      challenges.delete(challengeId);
-      evaluatorOtpStore.delete(challengeId);
+      delete db.challenges[challengeId];
+      delete db.evaluatorOtps[challengeId];
+      writeDB(db);
       return res.status(400).json({ status: 'max_attempts', error: 'Maximum attempts reached. Please request a new code.' });
     }
     const remaining = MAX_ATTEMPTS - challenge.attempts;
+    writeDB(db);
     return res.status(400).json({ status: 'wrong_code', error: `Incorrect code. Please try again. You have ${remaining} attempts left.` });
   }
 
-  challenges.delete(challengeId);
-  evaluatorOtpStore.delete(challengeId);
+  delete db.challenges[challengeId];
+  delete db.evaluatorOtps[challengeId];
 
-  for (let u of users.values()) {
-    if (u.id === challenge.userId) {
-      u.phoneVerified = true;
-      u.mfaEnabled = true;
+  for (let key in db.users) {
+    if (db.users[key].id === challenge.userId) {
+      db.users[key].phoneVerified = true;
+      db.users[key].mfaEnabled = true;
       break;
     }
   }
+  writeDB(db);
 
   res.json({ success: true, message: 'Mobile verified and MFA enabled.' });
 });
@@ -211,11 +241,11 @@ app.post('/api/verify-sms-otp', (req, res) => {
 // ----------------------------------------------------
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
+  const db = readDB();
   const normalizedEmail = email?.toLowerCase().trim();
-  const user = users.get(normalizedEmail);
+  const user = db.users[normalizedEmail];
 
-  // Brute force lockout check
-  const lock = failedLogins.get(normalizedEmail);
+  const lock = db.failedLogins[normalizedEmail];
   if (lock && lock.lockoutUntil && Date.now() < lock.lockoutUntil) {
     const waitSec = Math.ceil((lock.lockoutUntil - Date.now()) / 1000);
     return res.status(429).json({ error: `Account locked due to multiple failed attempts. Try again in ${waitSec}s.` });
@@ -226,14 +256,17 @@ app.post('/api/login', async (req, res) => {
     currentLock.attempts += 1;
     if (currentLock.attempts >= 5) {
       currentLock.lockoutUntil = Date.now() + 5 * 60 * 1000;
-      failedLogins.set(normalizedEmail, currentLock);
+      db.failedLogins[normalizedEmail] = currentLock;
+      writeDB(db);
       return res.status(429).json({ error: 'Account temporarily locked (5 failed attempts). Try again in 5 minutes.' });
     }
-    failedLogins.set(normalizedEmail, currentLock);
+    db.failedLogins[normalizedEmail] = currentLock;
+    writeDB(db);
     return res.status(401).json({ error: 'Invalid email or password. Please try again.' });
   }
 
-  failedLogins.delete(normalizedEmail);
+  delete db.failedLogins[normalizedEmail];
+  writeDB(db);
 
   if (user.mfaEnabled) {
     const challengeId = createChallenge(user.id, 'email', user.email);
@@ -246,7 +279,6 @@ app.post('/api/login', async (req, res) => {
     });
   }
 
-  // Fallback if MFA is not enabled
   req.session.userId = user.id;
   req.session.email = user.email;
   req.session.name = user.name;
@@ -255,38 +287,42 @@ app.post('/api/login', async (req, res) => {
 
 app.post('/api/verify-login-otp', (req, res) => {
   const { challengeId, otp } = req.body;
-  const challenge = challenges.get(challengeId);
+  const db = readDB();
+  const challenge = db.challenges[challengeId];
 
   if (!challenge) return res.status(400).json({ status: 'invalid', error: 'Invalid challenge session.' });
   if (Date.now() > challenge.expiresAt) {
-    challenges.delete(challengeId);
-    evaluatorOtpStore.delete(challengeId);
+    delete db.challenges[challengeId];
+    delete db.evaluatorOtps[challengeId];
+    writeDB(db);
     return res.status(400).json({ status: 'expired', error: 'Code has expired.' });
   }
 
   challenge.attempts += 1;
   if (challenge.otpHash !== hashValue(otp)) {
     if (challenge.attempts >= MAX_ATTEMPTS) {
-      challenges.delete(challengeId);
-      evaluatorOtpStore.delete(challengeId);
+      delete db.challenges[challengeId];
+      delete db.evaluatorOtps[challengeId];
+      writeDB(db);
       return res.status(400).json({ status: 'max_attempts', error: 'Maximum attempts reached.' });
     }
     const remaining = MAX_ATTEMPTS - challenge.attempts;
+    writeDB(db);
     return res.status(400).json({ status: 'wrong_code', error: `Incorrect code. Please try again. You have ${remaining} attempts left.` });
   }
 
   let authenticatedUser = null;
-  for (let u of users.values()) {
-    if (u.id === challenge.userId) {
-      authenticatedUser = u;
+  for (let key in db.users) {
+    if (db.users[key].id === challenge.userId) {
+      authenticatedUser = db.users[key];
       break;
     }
   }
 
-  challenges.delete(challengeId);
-  evaluatorOtpStore.delete(challengeId);
+  delete db.challenges[challengeId];
+  delete db.evaluatorOtps[challengeId];
+  writeDB(db);
 
-  // Set Session Cookie
   req.session.userId = authenticatedUser.id;
   req.session.email = authenticatedUser.email;
   req.session.name = authenticatedUser.name;
@@ -317,7 +353,7 @@ app.post('/api/logout', (req, res) => {
 });
 
 // ----------------------------------------------------
-// 4. JWT PROTECTED API FLOW
+// 4. JWT FLOW
 // ----------------------------------------------------
 app.post('/api/token', (req, res) => {
   if (!req.session || !req.session.userId) {
@@ -350,10 +386,9 @@ app.get('/api/protected', (req, res) => {
   }
 });
 
-// Local dev runner
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => console.log(`IAM Server active on http://localhost:${PORT}`));
+  app.listen(PORT, () => console.log(`IAM Server running on http://localhost:${PORT}`));
 }
 
 module.exports = app;
